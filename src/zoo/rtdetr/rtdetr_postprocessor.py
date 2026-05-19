@@ -21,29 +21,35 @@ def mod(a, b):
 @register()
 class RTDETRPostProcessor(nn.Module):
     __share__ = [
-        'num_classes', 
-        'use_focal_loss', 
-        'num_top_queries', 
+        'num_classes',
+        'use_focal_loss',
+        'num_top_queries',
         'remap_mscoco_category'
     ]
-    
+
     def __init__(
-        self, 
-        num_classes=80, 
-        use_focal_loss=True, 
-        num_top_queries=300, 
+        self,
+        num_classes=80,
+        use_focal_loss=True,
+        num_top_queries=300,
         remap_mscoco_category=False
     ) -> None:
         super().__init__()
         self.use_focal_loss = use_focal_loss
         self.num_top_queries = num_top_queries
         self.num_classes = int(num_classes)
-        self.remap_mscoco_category = remap_mscoco_category 
-        self.deploy_mode = False 
+        self.remap_mscoco_category = remap_mscoco_category
+        self.deploy_mode = False
+        # Store label2category mapping for non-MSCOCO datasets
+        self.label2category = None 
 
     def extra_repr(self) -> str:
         return f'use_focal_loss={self.use_focal_loss}, num_classes={self.num_classes}, num_top_queries={self.num_top_queries}'
-    
+
+    def set_label2category(self, label2category: dict):
+        """Set label to category ID mapping for non-MSCOCO datasets"""
+        self.label2category = label2category
+
     # def forward(self, outputs, orig_target_sizes):
     def forward(self, outputs, orig_target_sizes: torch.Tensor):
         logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
@@ -73,10 +79,14 @@ class RTDETRPostProcessor(nn.Module):
         if self.deploy_mode:
             return labels, boxes, scores
 
-        # TODO
+        # Remap labels to category IDs for COCO evaluation
         if self.remap_mscoco_category:
             from ...data.dataset import mscoco_label2category
             labels = torch.tensor([mscoco_label2category[int(x.item())] for x in labels.flatten()])\
+                .to(boxes.device).reshape(labels.shape)
+        elif self.label2category is not None:
+            # Use custom label2category mapping for non-MSCOCO datasets
+            labels = torch.tensor([self.label2category[int(x.item())] for x in labels.flatten()])\
                 .to(boxes.device).reshape(labels.shape)
 
         results = []

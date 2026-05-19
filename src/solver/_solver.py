@@ -77,6 +77,18 @@ class BaseSolver(object):
 
         self.evaluator = self.cfg.evaluator
 
+        # Set label2category mapping for postprocessor from validation dataset
+        if hasattr(self.postprocessor, 'set_label2category'):
+            # Handle both wrapped and unwrapped dataloaders
+            val_dataset = self.val_dataloader.dataset
+            # Unwrap DistributedDataLoader if needed
+            if hasattr(val_dataset, 'dataset'):
+                val_dataset = val_dataset.dataset
+            if hasattr(val_dataset, 'label2category'):
+                label2category = val_dataset.label2category
+                self.postprocessor.set_label2category(label2category)
+                print(f'Set postprocessor label2category mapping: {label2category}')
+
         # NOTE instantiating order
         if self.cfg.resume:
             print(f'Resume checkpoint from {self.cfg.resume}')
@@ -89,7 +101,19 @@ class BaseSolver(object):
             shuffle=self.cfg.val_dataloader.shuffle)
 
         self.evaluator = self.cfg.evaluator
-        
+
+        # Set label2category mapping for postprocessor from validation dataset
+        if hasattr(self.postprocessor, 'set_label2category'):
+            # Handle both wrapped and unwrapped dataloaders
+            val_dataset = self.val_dataloader.dataset
+            # Unwrap DistributedDataLoader if needed
+            if hasattr(val_dataset, 'dataset'):
+                val_dataset = val_dataset.dataset
+            if hasattr(val_dataset, 'label2category'):
+                label2category = val_dataset.label2category
+                self.postprocessor.set_label2category(label2category)
+                print(f'Set postprocessor label2category mapping: {label2category}')
+
         if self.cfg.resume:
             print(f'Resume checkpoint from {self.cfg.resume}')
             self.load_resume_state(self.cfg.resume)
