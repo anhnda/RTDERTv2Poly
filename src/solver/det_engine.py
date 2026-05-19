@@ -7,6 +7,7 @@ Copyright(c) 2023 lyuwenyu. All Rights Reserved.
 
 import sys
 import math
+import time
 from typing import Iterable
 
 import torch
@@ -104,7 +105,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, data_loader, coco_evaluator: CocoEvaluator, device):
+def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, data_loader, coco_evaluator: CocoEvaluator, device, infer_adapt=False):
     model.eval()
     criterion.eval()
     coco_evaluator.cleanup()
@@ -112,36 +113,52 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
 
     metric_logger = MetricLogger(delimiter="  ")
     header = 'Test:'
-    
+    eval_time = 0
+    accu_time = 0
     for samples, targets in metric_logger.log_every(data_loader, 10, header):
         samples = samples.to(device)
         targets = [{k: v.to(device) for k, v in t.items()} for t in targets]
 
         outputs = model(samples)
+        sub_seq_len = outputs['aux_sub_seq_len']
 
         # TODO (lyuwenyu), fix dataset converted using `convert_to_coco_api`?
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
         
-        results = postprocessor(outputs, orig_target_sizes)
+        results = postprocessor(outputs, orig_target_sizes,sub_seq_len)
 
         # if 'segm' in postprocessor.keys():
         #     target_sizes = torch.stack([t["size"] for t in targets], dim=0)
         #     results = postprocessor['segm'](results, outputs, orig_target_sizes, target_sizes)
 
         res = {target['image_id'].item(): output for target, output in zip(targets, results)}
+        start_t = time.time()
         if coco_evaluator is not None:
             coco_evaluator.update(res)
+        eval_time += time.time() - start_t
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
     print("Averaged stats:", metric_logger)
+    if infer_adapt:
+        print(f"N_call: {model.decoder.decoder.n_call}, sum_q: {model.decoder.decoder.n_query: .2f} \n,\
+            n_last_query: {model.decoder.decoder.n_last_query} \n\
+            avg: {model.decoder.decoder.n_query/model.decoder.decoder.n_call: .2f} \n\
+            avg_last: {model.decoder.decoder.n_last_query / model.decoder.decoder.n_call :.2f}")
+
     if coco_evaluator is not None:
         coco_evaluator.synchronize_between_processes()
 
     # accumulate predictions from all images
+    start_t = time.time()
     if coco_evaluator is not None:
         coco_evaluator.accumulate()
         coco_evaluator.summarize()
+    accu_time += time.time() - start_t
+    print(f"Eval: {eval_time: .6f}\nAccumulate: {accu_time: .6f}\nSum Eval: {eval_time+accu_time: .6f} \
+          \nAvg Eval: {(eval_time+accu_time)/5000: .6f}")
+    print(f"Infer: {metric_logger.total_time - eval_time: .6f} \
+          \nAvg Infer: {(metric_logger.total_time - eval_time)/5000 :.6f}")
 
     stats = {}
     # stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}

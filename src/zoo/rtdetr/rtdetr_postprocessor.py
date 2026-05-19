@@ -51,9 +51,14 @@ class RTDETRPostProcessor(nn.Module):
         self.label2category = label2category
 
     # def forward(self, outputs, orig_target_sizes):
-    def forward(self, outputs, orig_target_sizes: torch.Tensor):
+    def forward(self, outputs, orig_target_sizes: torch.Tensor,sub_seq_len=[]):
         logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
         # orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)        
+        if sub_seq_len is None or len(sub_seq_len) == 0:
+            bs, ln = outputs['pred_logits'].shape[0], outputs['pred_logits'].shape[1]
+            sub_seq_len = [ln for _ in range(bs)]
+        x_num_query = max(sub_seq_len)
+        logits, boxes = outputs['pred_logits'], outputs['pred_boxes']
 
         bbox_pred = torchvision.ops.box_convert(boxes, in_fmt='cxcywh', out_fmt='xyxy')
         bbox_pred *= orig_target_sizes.repeat(1, 2).unsqueeze(1)
@@ -90,9 +95,14 @@ class RTDETRPostProcessor(nn.Module):
                 .to(boxes.device).reshape(labels.shape)
 
         results = []
-        for lab, box, sco in zip(labels, boxes, scores):
-            result = dict(labels=lab, boxes=box, scores=sco)
-            results.append(result)
+        if sub_seq_len is not None:
+            for lab, box, sco, ln in zip(labels, boxes, scores, sub_seq_len):
+                result = dict(labels=lab[:ln], boxes=box[:ln], scores=sco[:ln])
+                results.append(result)
+        else:
+            for lab, box, sco in zip(labels, boxes, scores):
+                result = dict(labels=lab, boxes=box, scores=sco)
+                results.append(result)
         
         return results
         

@@ -14,7 +14,7 @@ from typing import List
 
 from .denoising import get_contrastive_denoising_training_group
 from .utils import deformable_attention_core_func_v2, get_activation, inverse_sigmoid
-from .utils import bias_init_with_prob
+from .utils import bias_init_with_prob,get_k_tensor_constrained, hash_v
 
 from ...core import register
 
@@ -236,12 +236,21 @@ class TransformerDecoderLayer(nn.Module):
 
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, hidden_dim, decoder_layer, num_layers, eval_idx=-1):
+    def __init__(self, hidden_dim, decoder_layer, num_layers, eval_idx=-1, infer_adapt=False,offset=50,lag=40, alpha=1.0, beta=0.4, gamma=0.4):
         super(TransformerDecoder, self).__init__()
         self.layers = nn.ModuleList([copy.deepcopy(decoder_layer) for _ in range(num_layers)])
         self.hidden_dim = hidden_dim
         self.num_layers = num_layers
         self.eval_idx = eval_idx if eval_idx >= 0 else num_layers + eval_idx
+        self.n_query = 0
+        self.n_call = 0
+        self.n_last_query = 0
+        self.infer_adapt = infer_adapt
+        self.offset=offset
+        self.lag = lag
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
 
     def forward(self,
                 target,
@@ -252,19 +261,49 @@ class TransformerDecoder(nn.Module):
                 score_head,
                 query_pos_head,
                 attn_mask=None,
-                memory_mask=None):
+                memory_mask=None,
+                sub_seq_len=None):
+        if self.infer_adapt:
+            if type(sub_seq_len) == list:
+                sub_seq_len = torch.tensor(sub_seq_len,dtype=torch.long, device=target.device)
+        else:
+            sub_seq_len = None
         dec_out_bboxes = []
         dec_out_logits = []
         ref_points_detach = F.sigmoid(ref_points_unact)
-
         output = target
+        self.n_call += 1
+        #c_sub = torch.tensor([100] * len(sub_seq_len), device=target.device)
         for i, layer in enumerate(self.layers):
+            if self.infer_adapt:
+                sz = max(sub_seq_len)
+                sz = hash_v(sz)
+                self.n_query += sz / len(self.layers)
+                sub_seq_o = sub_seq_len.clone()
+                ref_points_detach = ref_points_detach[:,:sz]
+                output = output[:,:sz]
             ref_points_input = ref_points_detach.unsqueeze(2)
             query_pos_embed = query_pos_head(ref_points_detach)
 
             output = layer(output, ref_points_input, memory, memory_spatial_shapes, attn_mask, memory_mask, query_pos_embed)
 
             inter_ref_bbox = F.sigmoid(bbox_head[i](output) + inverse_sigmoid(ref_points_detach))
+            if self.infer_adapt:
+                dec_out_logiti = score_head[i](output)
+                m_v, m_ind = dec_out_logiti.max(-1)
+                sub_seq_len = get_k_tensor_constrained(m_v,offset=self.offset, lag=self.lag-i*int(self.lag/5),sub_seq=sub_seq_len)
+
+                # sub_seq_len = get_k_tensor_constrained(m_v,offset=self.offset, lag=self.lag-i*int(self.lag/8),sub_seq=sub_seq_len)
+            #sub_seq_len = [v.item() for v in sub_seq_len]
+            pass
+            if self.infer_adapt:
+                if i == len(self.layers) - 1:
+                    self.n_last_query += max(sub_seq_len)
+                    pass
+                else:
+                    #sub_seq_len = torch.tensor([min(sub_seq_len[i]+90, sub_seq_o[i]) for i in range(len(sub_seq_len))], device=tgt.device)
+                    sub_seq_len = torch.minimum(sub_seq_len + self.offset + self.lag, sub_seq_o)
+                    #sub_seq_len = torch.maximum(sub_seq_len, c_sub)
 
             if self.training:
                 dec_out_logits.append(score_head[i](output))
@@ -281,7 +320,7 @@ class TransformerDecoder(nn.Module):
             ref_points = inter_ref_bbox
             ref_points_detach = inter_ref_bbox.detach()
 
-        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits)
+        return torch.stack(dec_out_bboxes), torch.stack(dec_out_logits), sub_seq_len
 
 
 @register()
@@ -310,14 +349,25 @@ class RTDETRTransformerv2(nn.Module):
                  eps=1e-2, 
                  aux_loss=True, 
                  cross_attn_method='default', 
-                 query_select_method='default'):
+                 query_select_method='default',
+                 infer_adapt=False,
+                 offset=50,
+                 lag=40,
+                 alpha=1.0,
+                 beta=0.4,
+                 gamma=0.4):
         super().__init__()
         assert len(feat_channels) <= num_levels
         assert len(feat_strides) == len(feat_channels)
         
         for _ in range(num_levels - len(feat_strides)):
             feat_strides.append(feat_strides[-1] * 2)
-
+        self.infer_adapt = infer_adapt
+        self.offset=offset
+        self.lag = lag
+        self.alpha = alpha
+        self.beta = beta
+        self.gamma = gamma
         self.hidden_dim = hidden_dim
         self.nhead = nhead
         self.feat_strides = feat_strides
@@ -328,7 +378,7 @@ class RTDETRTransformerv2(nn.Module):
         self.num_layers = num_layers
         self.eval_spatial_size = eval_spatial_size
         self.aux_loss = aux_loss
-
+        self.infer_adapt = infer_adapt
         assert query_select_method in ('default', 'one2many', 'agnostic'), ''
         assert cross_attn_method in ('default', 'discrete'), ''
         self.cross_attn_method = cross_attn_method
@@ -340,7 +390,7 @@ class RTDETRTransformerv2(nn.Module):
         # Transformer module
         decoder_layer = TransformerDecoderLayer(hidden_dim, nhead, dim_feedforward, dropout, \
             activation, num_levels, num_points, cross_attn_method=cross_attn_method)
-        self.decoder = TransformerDecoder(hidden_dim, decoder_layer, num_layers, eval_idx)
+        self.decoder = TransformerDecoder(hidden_dim, decoder_layer, num_layers, eval_idx, infer_adapt,offset,lag,alpha,beta,gamma)
 
         # denoising
         self.num_denoising = num_denoising
@@ -508,7 +558,7 @@ class RTDETRTransformerv2(nn.Module):
         if self.training:
             enc_topk_bboxes = F.sigmoid(enc_topk_bbox_unact)
             enc_topk_bboxes_list.append(enc_topk_bboxes)
-            enc_topk_logits_list.append(enc_topk_logits)
+        enc_topk_logits_list.append(enc_topk_logits)
 
         # if self.num_select_queries != self.num_queries:            
         #     raise NotImplementedError('')
@@ -570,9 +620,19 @@ class RTDETRTransformerv2(nn.Module):
 
         init_ref_contents, init_ref_points_unact, enc_topk_bboxes_list, enc_topk_logits_list = \
             self._get_decoder_input(memory, spatial_shapes, denoising_logits, denoising_bbox_unact)
+        if self.infer_adapt:
+            bs = init_ref_contents.shape[0]
+            q = init_ref_contents.shape[1]
+            sub_seq_len = torch.tensor([q] * bs, device=init_ref_contents.device, dtype=torch.long)
+        
+            enc_topk_logits = torch.cat(enc_topk_logits_list)
+            # sub_seq_len = get_k_tensor_constrained(enc_topk_logits.max(-1)[0], offset=100, lag=50, sub_seq=sub_seq_len, alpha=self.alpha, beta=self.beta, gamma=self.gamma)
+            sub_seq_len = get_k_tensor_constrained(enc_topk_logits.max(-1)[0], offset=self.offset*2, lag=self.lag, sub_seq=sub_seq_len, alpha=self.alpha, beta=self.beta, gamma=self.gamma)
 
+        else:
+            sub_seq_len = None
         # decoder
-        out_bboxes, out_logits = self.decoder(
+        out_bboxes, out_logits, sub_seq_len = self.decoder(
             init_ref_contents,
             init_ref_points_unact,
             memory,
@@ -580,7 +640,8 @@ class RTDETRTransformerv2(nn.Module):
             self.dec_bbox_head,
             self.dec_score_head,
             self.query_pos_head,
-            attn_mask=attn_mask)
+            attn_mask=attn_mask,
+            sub_seq_len=sub_seq_len)
 
         if self.training and dn_meta is not None:
             dn_out_bboxes, out_bboxes = torch.split(out_bboxes, dn_meta['dn_num_split'], dim=2)
@@ -596,7 +657,8 @@ class RTDETRTransformerv2(nn.Module):
             if dn_meta is not None:
                 out['dn_aux_outputs'] = self._set_aux_loss(dn_out_logits, dn_out_bboxes)
                 out['dn_meta'] = dn_meta
-
+        else:
+            out['aux_sub_seq_len'] = sub_seq_len
         return out
 
 
