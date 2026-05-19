@@ -49,7 +49,8 @@ class CocoDetection(FasterCocoDetection, DetDataset):
             image, target = self.prepare(image, target, category2label=mscoco_category2label)
             # image, target = self.prepare(image, target, category2label=self.category2label)
         else:
-            image, target = self.prepare(image, target)
+            # Use automatic category2label mapping to remap category IDs to contiguous labels [0, num_classes-1]
+            image, target = self.prepare(image, target, category2label=self.category2label)
 
         target['idx'] = torch.tensor([idx])
 

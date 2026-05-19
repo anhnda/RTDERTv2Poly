@@ -70,6 +70,13 @@ class HungarianMatcher(nn.Module):
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
+        # Check if all targets are empty (no annotations in any image of the batch)
+        total_num_boxes = sum([len(v["labels"]) for v in targets])
+        if total_num_boxes == 0:
+            # Return empty indices for all images in the batch
+            indices = [(torch.zeros(0, dtype=torch.int64), torch.zeros(0, dtype=torch.int64)) for _ in range(bs)]
+            return {'indices': indices}
+
         # We flatten to compute the cost matrices in a batch
         if self.use_focal_loss:
             out_prob = F.sigmoid(outputs["pred_logits"].flatten(0, 1))

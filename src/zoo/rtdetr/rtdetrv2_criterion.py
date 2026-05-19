@@ -151,6 +151,19 @@ class RTDETRCriterionv2(nn.Module):
         if is_dist_available_and_initialized():
             torch.distributed.all_reduce(num_boxes)
         num_boxes = torch.clamp(num_boxes / get_world_size(), min=1).item()
+
+        # If no boxes in batch, return zero losses to avoid division by zero
+        if num_boxes == 1 and sum(len(t["labels"]) for t in targets) == 0:
+            losses = {}
+            for loss in self.losses:
+                if loss == 'focal':
+                    losses['loss_focal'] = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+                elif loss == 'vfl':
+                    losses['loss_vfl'] = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+                elif loss == 'boxes':
+                    losses['loss_bbox'] = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+                    losses['loss_giou'] = torch.tensor(0.0, device=next(iter(outputs.values())).device, requires_grad=True)
+            return losses
         
         # Retrieve the matching between the outputs of the last layer and the targets
         matched = self.matcher(outputs_without_aux, targets)
