@@ -65,7 +65,8 @@ class RTDETRPostProcessor(nn.Module):
 
         if self.use_focal_loss:
             scores = F.sigmoid(logits)
-            scores, index = torch.topk(scores.flatten(1), self.num_top_queries, dim=-1)
+            num_top_queries = min(self.num_top_queries, scores.flatten(1).shape[-1])
+            scores, index = torch.topk(scores.flatten(1), num_top_queries, dim=-1)
             # TODO for older tensorrt
             # labels = index % self.num_classes
             labels = mod(index, self.num_classes)
