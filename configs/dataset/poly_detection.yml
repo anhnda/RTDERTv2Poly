@@ -35,8 +35,8 @@ val_dataloader:
   type: DataLoader
   dataset: 
     type: CocoDetection
-    img_folder: ./dataset/poly/images/
-    ann_file: ./dataset/poly/annotations/val.json
+    img_folder: /data/poly/images/
+    ann_file: /data/poly/annotations/val.json
     return_masks: False
     transforms:
       type: Compose
