@@ -105,7 +105,7 @@ def train_one_epoch(model: torch.nn.Module, criterion: torch.nn.Module,
 
 
 @torch.no_grad()
-def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, data_loader, coco_evaluator: CocoEvaluator, device, infer_adapt=False):
+def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, data_loader, coco_evaluator: CocoEvaluator, device, infer_adapt=False, fix_query=300):
     model.eval()
     criterion.eval()
     coco_evaluator.cleanup()
@@ -122,9 +122,15 @@ def evaluate(model: torch.nn.Module, criterion: torch.nn.Module, postprocessor, 
         outputs = model(samples)
         sub_seq_len = outputs['aux_sub_seq_len']
 
+        if not infer_adapt:
+            n = min(fix_query, outputs['pred_logits'].shape[1])
+            outputs['pred_logits'] = outputs['pred_logits'][:, :n, :]
+            outputs['pred_boxes'] = outputs['pred_boxes'][:, :n, :]
+            sub_seq_len = [n] * outputs['pred_logits'].shape[0]
+
         # TODO (lyuwenyu), fix dataset converted using `convert_to_coco_api`?
         orig_target_sizes = torch.stack([t["orig_size"] for t in targets], dim=0)
-        
+
         results = postprocessor(outputs, orig_target_sizes,sub_seq_len)
 
         # if 'segm' in postprocessor.keys():

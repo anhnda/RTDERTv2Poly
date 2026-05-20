@@ -122,10 +122,16 @@ class DetSolver(BaseSolver):
         self.eval()
 
         module = self.ema.module if self.ema else self.model
-        print("Infer adapt: ", self.model.decoder.infer_adapt )
+        infer_adapt = self.model.decoder.infer_adapt
+        print("Infer adapt: ", infer_adapt)
+
+        fix_query = getattr(self.cfg, 'fix_query', 300)
+        if not infer_adapt:
+            print(f"Fix query: {fix_query}")
 
         test_stats, coco_evaluator = evaluate(module, self.criterion, self.postprocessor,
-                self.val_dataloader, self.evaluator, self.device, self.model.decoder.infer_adapt)
+                self.val_dataloader, self.evaluator, self.device, infer_adapt,
+                fix_query=fix_query)
                 
         if self.output_dir:
             dist_utils.save_on_master(coco_evaluator.coco_eval["bbox"].eval, self.output_dir / "eval.pth")
