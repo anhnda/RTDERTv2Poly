@@ -125,7 +125,7 @@ class DetSolver(BaseSolver):
         infer_adapt = self.model.decoder.infer_adapt
         print("Infer adapt: ", infer_adapt)
 
-        fix_query = getattr(self.cfg, 'fix_query', 300)
+        fix_query = self.cfg.yaml_cfg.get('fix_query', 300)
         if not infer_adapt:
             print(f"Fix query: {fix_query}")
 
