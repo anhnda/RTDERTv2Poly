@@ -4,9 +4,9 @@ CONFIG="configs/rtdetrv2/include/rtdetrv2_r50vd.yml"
 LOG="poly_result.log"
 
 # Set RESUME to your checkpoint path, e.g.: RESUME="-r output/rtdetrv2_r50vd_6x_poly/best.pth"
-RESUME=""
+RESUME="-r output/rtdetrv2_r50vd_6x_poly/best.pth"
 
-RUN_CMD="python tools/train.py -c configs/rtdetrv2/rtdetrv2_r50vd_6x_poly.yml --test-only ${RESUME}"
+RUN_CMD="python tools/train.py -c configs/rtdetrv2/rtdetrv2_r50vd_6x_poly_lowmem.yml --test-only ${RESUME}"
 
 set_yaml() {
     local key=$1
